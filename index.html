@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>LED Text/Media Controller — Mobile</title>
+<style>
+  :root{
+    --bg:#0f1720; --card:#0b1220; --accent:#06b6d4; --muted:#94a3b8;
+    --radius:12px; --gap:12px;
+  }
+  html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Siemreap", Arial; background:linear-gradient(180deg,#071021 0%, #071b2b 100%); color:#e6eef6;}
+  .wrap{max-width:860px;margin:18px auto;padding:16px;box-sizing:border-box;}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  h1{font-size:18px;margin:0}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border-radius:var(--radius); padding:12px; box-shadow:0 6px 18px rgba(2,6,23,0.6); margin-bottom:12px;}
+  label{display:block;font-size:13px;color:var(--muted); margin-bottom:6px}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .col{flex:1;min-width:140px}
+  textarea{width:100%;min-height:84px;border-radius:8px;padding:10px;background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit;resize:vertical;font-size:16px}
+  select,input[type="number"],input[type="range"],input[type="file"]{width:100%;padding:8px;border-radius:8px;background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit}
+  .controls{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .preview-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px}
+  canvas{width:100%;max-width:640px;border-radius:8px;background:black;border:1px solid rgba(255,255,255,0.04)}
+  .btn{display:inline-block;padding:10px 14px;border-radius:10px;background:var(--accent);color:#012; font-weight:600;border:none;cursor:pointer}
+  .btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+  .btn.danger{background:#ef4444;color:white}
+  .small{font-size:13px;color:var(--muted)}
+  footer{font-size:12px;color:var(--muted);text-align:center;margin-top:10px}
+  .status{font-size:13px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,0.02);display:inline-block}
+  .log{max-height:180px;overflow:auto;background:rgba(2,6,23,0.35);border-radius:8px;padding:8px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;font-size:12px;border:1px solid rgba(255,255,255,0.06)}
+  .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,0.06);font-size:12px;margin-right:6px}
+  @media (max-width:480px){ .controls{grid-template-columns:1fr} header{gap:8px} h1{font-size:16px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>LED Text/Media Controller</h1>
+      <div class="small">Khmer / English / Emoji (Pango render) + Image/Video streaming to ESP32</div>
+    </div>
+    <div style="margin-left:auto;text-align:right">
+      <div class="status" id="wsStatus">WS: disconnected</div>
+    </div>
+  </header>
+
+  <!-- TEXT RENDER CARD -->
+  <div class="card">
+    <div class="row" style="align-items:flex-end">
+      <div class="col">
+        <label for="textInput">Text</label>
+        <textarea id="textInput">ចម្រៀងខ្មែរ 🎶 Hello 🌏</textarea>
+      </div>
+      <div class="col">
+        <label for="textFile">Load text file (.txt)</label>
+        <input id="textFile" type="file" accept=".txt" />
+      </div>
+    </div>
+
+    <div style="height:12px"></div>
+
+    <div class="controls">
+      <div>
+        <label for="fontSelect">Font family</label>
+        <select id="fontSelect" title="Server-side Pango font family">
+          <option value="Siemreap">Siemreap (Khmer)</option>
+          <option value="Noto Sans" selected>Noto Sans</option>
+          <option value="Noto Color Emoji">Noto Color Emoji</option>
+          <option value="DejaVu Sans">DejaVu Sans</option>
+          <option value="Arial">Arial</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="fontSize">Font size (pt) <span id="fontSizeValue">22</span></label>
+        <input id="fontSize" type="range" min="8" max="40" value="22" />
+      </div>
+
+      <div>
+        <label for="fgColor">Text color (FG)</label>
+        <input id="fgColor" type="color" value="#FFFFFF" />
+      </div>
+
+      <div>
+        <label for="bgColor">Background color (BG)</label>
+        <input id="bgColor" type="color" value="#000000" />
+      </div>
+    </div>
+
+    <div style="height:12px"></div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button id="previewBtn" class="btn secondary">Update Preview</button>
+      <button id="sendTextBtn" class="btn">Send Text → ESP32</button>
+      <span class="pill">Matrix: <strong id="matrixSize">128×32</strong></span>
+      <span class="pill">WebSocket: <code id="wsUri"></code></span>
+    </div>
+  </div>
+
+  <!-- MEDIA CARD -->
+  <div class="card">
+    <div class="row">
+      <div class="col">
+        <label for="imageFile">Upload image</label>
+        <input id="imageFile" type="file" accept="image/*" />
+      </div>
+      <div class="col">
+        <label for="videoFile">Upload video</label>
+        <input id="videoFile" type="file" accept="video/*" />
+      </div>
+      <div class="col">
+        <label for="videoFps">Video FPS <span id="fpsValue">10</span></label>
+        <input id="videoFps" type="range" min="1" max="30" value="10" />
+      </div>
+    </div>
+
+    <div style="height:10px"></div>
+    <div class="row" style="gap:8px">
+      <button id="sendImageBtn" class="btn">Send Image → ESP32</button>
+      <button id="startVideoBtn" class="btn">Start Video Stream</button>
+      <button id="stopVideoBtn" class="btn danger">Stop Stream</button>
+    </div>
+  </div>
+
+  <!-- PREVIEW -->
+  <div class="card preview-wrap">
+    <label class="small">Preview (approximate; server does final Pango render for text)</label>
+    <canvas id="previewCanvas" width="512" height="128" style="aspect-ratio:4/1"></canvas>
+  </div>
+
+  <!-- STATUS LOG -->
+  <div class="card">
+    <label class="small">Status</label>
+    <div id="log" class="log"></div>
+  </div>
+
+  <footer>
+    <div class="small">Tip: For image/video, frames are converted to RGB565 on the browser and forwarded to ESP32 via server.</div>
+  </footer>
+</div>
+
+<script>
+(function(){
+  // ---- Constants / Elements ----
+  const MATRIX_W = 128, MATRIX_H = 32;
+
+  const WS_URI = (window.location.protocol === "https:" ? "wss://" : "ws://")
+               + window.location.host + "/ws";
+  const wsStatus = document.getElementById('wsStatus');
+  const wsUriEl = document.getElementById('wsUri'); wsUriEl.textContent = WS_URI;
+
+  const canvas = document.getElementById('previewCanvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  const textInput = document.getElementById('textInput');
+  const textFile = document.getElementById('textFile');
+  const fontSelect = document.getElementById('fontSelect');
+  const fontSizeInput = document.getElementById('fontSize');
+  const fontSizeValue = document.getElementById('fontSizeValue');
+  const fgColor = document.getElementById('fgColor');
+  const bgColor = document.getElementById('bgColor');
+  const previewBtn = document.getElementById('previewBtn');
+  const sendTextBtn = document.getElementById('sendTextBtn');
+
+  const imageFile = document.getElementById('imageFile');
+  const videoFile = document.getElementById('videoFile');
+  const videoFps = document.getElementById('videoFps');
+  const fpsValue = document.getElementById('fpsValue');
+  const sendImageBtn = document.getElementById('sendImageBtn');
+  const startVideoBtn = document.getElementById('startVideoBtn');
+  const stopVideoBtn = document.getElementById('stopVideoBtn');
+
+  const logEl = document.getElementById('log');
+
+  // ---- Logging ----
+  function log(msg) {
+    const time = new Date().toLocaleTimeString();
+    logEl.innerHTML = `<div>[${time}] ${msg}</div>` + logEl.innerHTML;
+  }
+
+  // ---- WebSocket (auto-reconnect) ----
+  let ws = null;
+  let reconnectTimer = null;
+
+  function connectWS() {
+    try {
+      ws = new WebSocket(WS_URI);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        wsStatus.textContent = 'WS: connected';
+        wsStatus.style.background='rgba(6,182,212,0.12)';
+        log('WebSocket connected');
+        // Identify as browser client (so server doesn't treat us as ESP32)
+        ws.send(JSON.stringify({type:'hello', role:'browser'}));
+      };
+
+      ws.onclose = () => {
+        wsStatus.textContent = 'WS: disconnected';
+        wsStatus.style.background='';
+        log('WebSocket disconnected');
+        reconnectTimer = setTimeout(connectWS, 2000);
+      };
+
+      ws.onerror = (e) => {
+        log('WS error (see console)'); console.warn('WS error', e);
+        wsStatus.textContent='WS: error';
+      };
+
+      ws.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer) {
+          log(`Received binary frame (${ev.data.byteLength} bytes)`);
+        } else {
+          let m = null;
+          try { m = JSON.parse(ev.data); } catch { /* plain text */ }
+          if (m && m.type === 'status') log(`${m.level || 'info'}: ${m.message}`);
+          else log(`MSG: ${ev.data}`);
+        }
+      };
+    } catch(e) {
+      log('WS connect failed, retrying...');
+      reconnectTimer = setTimeout(connectWS, 2000);
+    }
+  }
+  connectWS();
+
+  // ---- UI helpers ----
+  fontSizeInput.addEventListener('input', ()=> fontSizeValue.textContent = fontSizeInput.value);
+  fpsValue.textContent = videoFps.value;
+  videoFps.addEventListener('input', ()=> fpsValue.textContent = videoFps.value);
+
+  textFile.addEventListener('change', async (e)=>{
+    const f = e.target.files?.[0];
+    if(!f) return;
+    const content = await f.text();
+    textInput.value = content;
+    drawTextPreview();
+    log(`Loaded text file: ${f.name}`);
+  });
+
+  // ---- Preview (text) ----
+  function drawTextPreview() {
+    ctx.fillStyle = bgColor.value;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = fgColor.value;
+    ctx.textBaseline = 'top';
+    ctx.font = `${parseInt(fontSizeInput.value,10)}px ${fontSelect.value}, sans-serif`;
+    // Simple single-line preview (approx). Server does true Pango layout.
+    ctx.fillText(textInput.value, 10, 10);
+  }
+  previewBtn.addEventListener('click', drawTextPreview);
+
+  // ---- Build text payload for server-side Pango render ----
+  function buildTextPayload() {
+    return {
+      type: "command",
+      action: "render_and_send",
+      text: textInput.value,
+      font_family: fontSelect.value,
+      font_size_pt: Number(fontSizeInput.value),
+      fg_color: fgColor.value, // "#RRGGBB"
+      bg_color: bgColor.value, // "#RRGGBB"
+      width: MATRIX_W,
+      height: MATRIX_H
+    };
+  }
+
+  // ---- Send text (server renders → forwards RGB565 to ESP32) ----
+  function sendText() {
+    if(!ws || ws.readyState !== WebSocket.OPEN){
+      alert("WebSocket not connected");
+      return;
+    }
+    const payload = buildTextPayload();
+    ws.send(JSON.stringify(payload));
+    log('Sent text render command');
+  }
+  sendTextBtn.addEventListener('click', sendText);
+
+  // ---- RGB565 encoding helpers (client-side for image/video) ----
+  function rgb888to565(r,g,b) {
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+  }
+
+  function frameFromCanvasToRGB565Bytes() {
+    // downscale to matrix size using an offscreen canvas
+    const s = document.createElement('canvas');
+    s.width = MATRIX_W; s.height = MATRIX_H;
+    const sctx = s.getContext('2d', { willReadFrequently: true });
+    sctx.drawImage(canvas, 0, 0, MATRIX_W, MATRIX_H);
+    const img = sctx.getImageData(0, 0, MATRIX_W, MATRIX_H).data;
+
+    // pack as uint16 RGB565, little-endian (matches your ESP decoding)
+    const buf = new ArrayBuffer(MATRIX_W * MATRIX_H * 2);
+    const view = new DataView(buf);
+    let idx = 0;
+    for (let i = 0; i < img.length; i += 4) {
+      const r = img[i+2], g = img[i+1], b = img[i], a = img[i+3]; // canvas is RGBA; but we don't premultiply
+      // Apply simple alpha over black (or we could blend with chosen BG if desired)
+      const rr = a ? Math.round(r * a / 255) : 0;
+      const gg = a ? Math.round(g * a / 255) : 0;
+      const bb = a ? Math.round(b * a / 255) : 0;
+      const pixel565 = rgb888to565(rr, gg, bb);
+      view.setUint16(idx, pixel565, true); // little-endian
+      idx += 2;
+    }
+    return buf;
+  }
+
+  // ---- Load & send image ----
+  let loadedImage = null;
+  imageFile.addEventListener('change', (e)=>{
+    const f = e.target.files?.[0];
+    if(!f) return;
+    const img = new Image();
+    img.onload = () => {
+      // Letterbox-fit into preview canvas (keeps aspect)
+      ctx.fillStyle = bgColor.value;
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      const ar = img.width / img.height;
+      const targetW = canvas.width;
+      const targetH = canvas.height;
+      let dw = targetW, dh = Math.round(dw / ar);
+      if (dh > targetH) { dh = targetH; dw = Math.round(dh * ar); }
+      const dx = Math.floor((targetW - dw)/2), dy = Math.floor((targetH - dh)/2);
+      ctx.drawImage(img, dx, dy, dw, dh);
+      loadedImage = img;
+      log(`Image loaded: ${f.name} (${img.width}×${img.height})`);
+    };
+    img.onerror = ()=> log('Image load error');
+    img.src = URL.createObjectURL(f);
+  });
+
+  function sendImage() {
+    if(!ws || ws.readyState !== WebSocket.OPEN){
+      alert("WebSocket not connected");
+      return;
+    }
+    if(!loadedImage){
+      alert("Please choose an image first");
+      return;
+    }
+    // current preview canvas already has image letterboxed; convert that
+    const buf = frameFromCanvasToRGB565Bytes();
+    ws.send(buf); // server will forward to ESP32
+    log(`Sent image frame (${buf.byteLength} bytes)`);
+  }
+  sendImageBtn.addEventListener('click', sendImage);
+
+  // ---- Video streaming ----
+  let videoEl = document.createElement('video');
+  videoEl.muted = true; videoEl.playsInline = true; videoEl.crossOrigin = 'anonymous';
+  let videoTimer = null;
+
+  videoFile.addEventListener('change', (e)=>{
+    const f = e.target.files?.[0];
+    if(!f) return;
+    stopVideoStream();
+    videoEl.src = URL.createObjectURL(f);
+    videoEl.onloadeddata = ()=>{
+      log(`Video loaded: ${f.name} (${videoEl.videoWidth}×${videoEl.videoHeight})`);
+      // Draw first frame into preview
+      drawVideoFrameToPreview();
+    };
+    videoEl.onerror = ()=> log('Video load error');
+  });
+
+  function drawVideoFrameToPreview() {
+    if (!videoEl.videoWidth) return;
+    ctx.fillStyle = bgColor.value;
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    const ar = videoEl.videoWidth / videoEl.videoHeight;
+    const targetW = canvas.width, targetH = canvas.height;
+    let dw = targetW, dh = Math.round(dw / ar);
+    if (dh > targetH) { dh = targetH; dw = Math.round(dh * ar); }
+    const dx = Math.floor((targetW - dw)/2), dy = Math.floor((targetH - dh)/2);
+    ctx.drawImage(videoEl, dx, dy, dw, dh);
+  }
+
+  function startVideoStream() {
+    if(!ws || ws.readyState !== WebSocket.OPEN){
+      alert("WebSocket not connected");
+      return;
+    }
+    if(!videoEl.src){
+      alert("Choose a video first");
+      return;
+    }
+    const fps = parseInt(videoFps.value, 10) || 10;
+    videoEl.currentTime = 0;
+    videoEl.play().then(()=>{
+      const interval = Math.round(1000 / fps);
+      log(`Streaming video @ ${fps} FPS`);
+      videoTimer = setInterval(() => {
+        if (videoEl.ended || videoEl.paused) { stopVideoStream(); return; }
+        drawVideoFrameToPreview();
+        const buf = frameFromCanvasToRGB565Bytes();
+        ws.send(buf);
+        // The ESP32 already expects full 128×32×2 bytes per frame
+      }, interval);
+    }).catch(err=>{
+      log(`Video play error: ${err}`);
+    });
+  }
+
+  function stopVideoStream() {
+    if(videoTimer){ clearInterval(videoTimer); videoTimer = null; }
+    if(!videoEl.paused) videoEl.pause();
+    log('Stopped video stream');
+  }
+
+  startVideoBtn.addEventListener('click', startVideoStream);
+  stopVideoBtn.addEventListener('click', stopVideoStream);
+
+  // Initial preview
+  drawTextPreview();
+})();
+</script>
+</body>
+</html>
