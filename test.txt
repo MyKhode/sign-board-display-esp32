@@ -1,0 +1,379 @@
+#include <WiFi.h>
+#include <WebSocketsClient.h>
+#include <ESP32-VirtualMatrixPanel-I2S-DMA.h>
+
+// ---------------- Panel Config ----------------
+#define PANEL_RES_X (64 * 2)  // 128
+#define PANEL_RES_Y 32
+#define NUM_ROWS 1
+#define NUM_COLS 1
+#define PANEL_CHAIN (NUM_ROWS * NUM_COLS)
+#define CHAIN_BOTTOM_LEFT_UP 0x01
+
+#define R1_PIN  25
+#define G1_PIN  26
+#define B1_PIN  27
+#define R2_PIN  14
+#define G2_PIN  12
+#define B2_PIN  13
+#define A_PIN   23
+#define B_PIN   22
+#define C_PIN   5
+#define D_PIN   17
+#define E_PIN   32
+#define LAT_PIN 4
+#define OE_PIN  15
+#define CLK_PIN 16
+
+#define VIRTUAL_MATRIX_CHAIN_TYPE CHAIN_BOTTOM_LEFT_UP
+
+// ---------------- WiFi ----------------
+const char* ssid     = "Sovannara";
+const char* password = "11111111";
+
+// ---------------- Display Objects ----------------
+MatrixPanel_I2S_DMA *dma_display = nullptr;
+VirtualMatrixPanel  *virtualDisp = nullptr;
+
+// ---------------- WebSocket ----------------
+WebSocketsClient webSocket;
+
+// ======= Render mode / flags =======
+enum AnimateMode : uint8_t { MODE_SCROLL = 0, MODE_STATIC = 1 };
+static volatile AnimateMode g_mode = MODE_SCROLL;
+static volatile bool g_bgNoise = false;
+static const int SCROLL_SPEED = 1; // px per tick
+
+// ==================== LEGACY (whole frame) ====================
+static uint16_t *front_pixels = nullptr;
+static uint16_t  front_w = 128, front_h = 32;
+static size_t    front_capacity = 0;
+static bool      updating = false;
+static uint8_t   header_buf_legacy[4];
+static uint8_t   header_got_legacy = 0;
+static size_t    expected_px_bytes = 0;
+static size_t    received_px_bytes = 0;
+
+// ==================== SEGMENTED ("SG") ====================
+struct Tile {
+  uint16_t x = 0;
+  uint16_t w = 0, h = 0;
+  uint16_t *pix = nullptr;
+  size_t capacity = 0;
+
+  void clear() { if (pix) { free(pix); pix = nullptr; } x = 0; w = 0; h = 0; capacity = 0; }
+  bool ensure(size_t need_bytes) {
+    if (need_bytes <= capacity) return true;
+    if (pix) { free(pix); pix = nullptr; capacity = 0; }
+    pix = (uint16_t*) malloc(need_bytes);
+    if (!pix) return false;
+    capacity = need_bytes;
+    return true;
+  }
+};
+
+#define MAX_TILES 64
+static Tile tiles[MAX_TILES];
+static int  tileCount = 0;
+static size_t cachedBytes = 0;
+static const size_t CACHE_LIMIT = 140 * 1024;
+
+static uint16_t total_w = 0;
+static const int view_w = PANEL_RES_X; 
+static const int view_h = PANEL_RES_Y;
+static int       scroll_x = view_w;
+static uint16_t  viewBuffer[PANEL_RES_X * PANEL_RES_Y];
+
+static Tile rxTile;
+static uint8_t  hdr_sg[10];
+static uint8_t  got_sg = 0;
+static uint16_t incoming_total_w = 0, incoming_seg_x = 0, incoming_seg_w = 0, incoming_h = 0;
+static size_t   expected_px_bytes_sg = 0, received_px_bytes_sg = 0;
+static bool     segmentedActive = false;
+static bool     cacheEnabled = true;
+
+// ---------------- Utils ----------------
+static bool ensure_front_capacity(size_t need_bytes) {
+  if (need_bytes <= front_capacity) return true;
+  if (front_pixels) { free(front_pixels); front_pixels = nullptr; }
+  front_capacity = 0;
+  front_pixels = (uint16_t*) malloc(need_bytes);
+  if (!front_pixels) return false;
+  front_capacity = need_bytes;
+  return true;
+}
+
+static inline void legacy_reset_header() {
+  header_got_legacy = 0;
+  expected_px_bytes = 0;
+  received_px_bytes = 0;
+  updating = false;
+}
+
+static void resetTileCache() {
+  for (int i = 0; i < tileCount; ++i) tiles[i].clear();
+  tileCount = 0;
+  cachedBytes = 0;
+}
+
+static inline void start_new_line(uint16_t tot_w) {
+  total_w = (tot_w ? tot_w : 1);
+  scroll_x = view_w;           
+  resetTileCache();
+  segmentedActive = true;
+}
+
+static bool appendTileToCacheMove(Tile &src) {
+  if (!cacheEnabled) return false;
+  if (tileCount >= MAX_TILES) return false;
+  size_t bytes = (size_t)src.w * src.h * 2;
+  if (cachedBytes + bytes > CACHE_LIMIT) { cacheEnabled = false; return false; }
+  tiles[tileCount] = src;  // move
+  src.pix = nullptr; src.capacity = 0; src.w = src.h = 0; src.x = 0;
+  cachedBytes += bytes;
+  tileCount++;
+  return true;
+}
+
+// Background sparkles
+uint16_t randomColor() {
+  return dma_display->color565(random(256), random(256), random(256));
+}
+void drawRandomPixelsBackground(uint16_t *buf, int w, int h) {
+  for (int i = 0; i < 50; i++) {
+    int px = random(w);
+    int py = random(h);
+    buf[py * w + px] = randomColor();
+  }
+}
+
+// ---------------- Text Config WS (very light JSON parsing) ----------------
+static void applyConfigText(const char* s) {
+  // Expect: {"type":"config","animate":"scroll"|"static","bg_noise":true|false}
+  if (!s) return;
+  if (!strstr(s, "\"type\"")) return;
+  if (!strstr(s, "\"config\"")) return;
+
+  if (strstr(s, "\"animate\"")) {
+    if (strstr(s, "static")) g_mode = MODE_STATIC;
+    else                     g_mode = MODE_SCROLL;
+    // when switching mode, reset scroll
+    scroll_x = view_w;
+  }
+  if (strstr(s, "\"bg_noise\"")) {
+    // crude boolean pick
+    if (strstr(s, "true")) g_bgNoise = true;
+    else if (strstr(s, "false")) g_bgNoise = false;
+  }
+}
+
+// ---------------- WebSocket event ----------------
+void webSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
+  if (type == WStype_TEXT) {
+    ((char*)payload)[length] = '\0';  // null-terminate
+    applyConfigText((const char*)payload);
+    return;
+  }
+
+  if (type != WStype_BIN) return;
+
+  // SEGMENTED path if starts with 'SG' or we are mid-segment
+  if ((length >= 2 && payload[0]=='S' && payload[1]=='G') || got_sg>0 || expected_px_bytes_sg>0) {
+    size_t pos = 0;
+    while (pos < length) {
+      // Header (10 bytes)
+      while (got_sg < 10 && pos < length) {
+        hdr_sg[got_sg++] = payload[pos++];
+        if (got_sg == 10) {
+          if (!(hdr_sg[0]=='S' && hdr_sg[1]=='G')) { memmove(hdr_sg, hdr_sg+1, 9); got_sg = 9; continue; }
+          incoming_total_w = (uint16_t)(hdr_sg[2] | (hdr_sg[3]<<8));
+          incoming_seg_x   = (uint16_t)(hdr_sg[4] | (hdr_sg[5]<<8));
+          incoming_seg_w   = (uint16_t)(hdr_sg[6] | (hdr_sg[7]<<8));
+          incoming_h       = (uint16_t)(hdr_sg[8] | (hdr_sg[9]<<8));
+          if (incoming_h == 0 || incoming_h > 64) incoming_h = 32;
+          expected_px_bytes_sg = (size_t)incoming_seg_w * incoming_h * 2;
+          received_px_bytes_sg = 0;
+
+          // begin segment
+          rxTile.clear();
+          rxTile.x = incoming_seg_x; rxTile.w = incoming_seg_w; rxTile.h = incoming_h;
+          if (!rxTile.ensure((size_t)incoming_seg_w * incoming_h * 2)) { cacheEnabled = false; }
+          if (incoming_seg_x == 0) start_new_line(incoming_total_w);
+        }
+      }
+
+      // Pixels
+      if (got_sg == 10 && expected_px_bytes_sg > 0 && pos < length) {
+        size_t remain = expected_px_bytes_sg - received_px_bytes_sg;
+        size_t chunk  = length - pos;
+        if (chunk > remain) chunk = remain;
+
+        if (chunk > 0 && rxTile.pix) {
+          memcpy(((uint8_t*)rxTile.pix) + received_px_bytes_sg, payload + pos, chunk);
+          received_px_bytes_sg += chunk; pos += chunk;
+        } else {
+          pos += chunk; received_px_bytes_sg += chunk; // skip
+        }
+
+        if (received_px_bytes_sg >= expected_px_bytes_sg) {
+          // finish -> cache (move)
+          if (!appendTileToCacheMove(rxTile)) { rxTile.clear(); }
+          got_sg = 0; expected_px_bytes_sg = received_px_bytes_sg = 0;
+        }
+      } else {
+        break;
+      }
+    }
+    return;
+  }
+
+  // ---------- LEGACY (whole frame W,H + pixels) ----------
+  size_t pos = 0;
+  while (pos < length) {
+    // header
+    while (header_got_legacy < 4 && pos < length) {
+      header_buf_legacy[header_got_legacy++] = payload[pos++];
+      if (header_got_legacy == 4) {
+        uint16_t w = (uint16_t)(header_buf_legacy[0] | (header_buf_legacy[1]<<8));
+        uint16_t h = (uint16_t)(header_buf_legacy[2] | (header_buf_legacy[3]<<8));
+        if (w==0) w=128; if (h==0) h=32;
+        expected_px_bytes = (size_t)w * h * 2;
+        updating = true;
+        if (!ensure_front_capacity(expected_px_bytes)) { legacy_reset_header(); return; }
+        front_w = w; front_h = h; received_px_bytes = 0;
+      }
+    }
+    // pixels
+    if (header_got_legacy == 4 && updating && pos < length) {
+      size_t remain = expected_px_bytes - received_px_bytes;
+      size_t chunk  = length - pos;
+      if (chunk > remain) chunk = remain;
+      if (chunk > 0) {
+        memcpy(((uint8_t*)front_pixels) + received_px_bytes, payload + pos, chunk);
+        received_px_bytes += chunk; pos += chunk;
+      }
+      if (received_px_bytes >= expected_px_bytes) {
+        updating = false; header_got_legacy = 0; expected_px_bytes = 0;
+        scroll_x = view_w; // new content
+        // legacy cancel segmented
+        resetTileCache(); segmentedActive = false;
+      }
+    } else break;
+  }
+}
+
+// ---------------- Setup ----------------
+void setup() {
+  HUB75_I2S_CFG mxconfig(PANEL_RES_X, PANEL_RES_Y, PANEL_CHAIN);
+  mxconfig.gpio.r1 = R1_PIN;  mxconfig.gpio.g1 = G1_PIN;  mxconfig.gpio.b1 = B1_PIN;
+  mxconfig.gpio.r2 = R2_PIN;  mxconfig.gpio.g2 = G2_PIN;  mxconfig.gpio.b2 = B2_PIN;
+  mxconfig.gpio.a  = A_PIN;   mxconfig.gpio.b  = B_PIN;   mxconfig.gpio.c  = C_PIN;
+  mxconfig.gpio.d  = D_PIN;   mxconfig.gpio.e  = E_PIN;   mxconfig.gpio.lat = LAT_PIN;
+  mxconfig.gpio.oe = OE_PIN;  mxconfig.gpio.clk = CLK_PIN;
+  mxconfig.clkphase = false;
+  mxconfig.driver   = HUB75_I2S_CFG::FM6124;
+
+  dma_display = new MatrixPanel_I2S_DMA(mxconfig);
+  dma_display->setBrightness8(192);
+  dma_display->begin();
+
+  virtualDisp = new VirtualMatrixPanel((*dma_display), NUM_ROWS, NUM_COLS, PANEL_RES_X, PANEL_RES_Y, VIRTUAL_MATRIX_CHAIN_TYPE);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) { delay(150); }
+
+  webSocket.begin("esp.ikhode.com", 80, "/ws");
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(2000);
+
+  ensure_front_capacity(front_w * front_h * 2);
+  if (front_pixels) memset(front_pixels, 0, front_w * front_h * 2);
+
+  resetTileCache();
+  segmentedActive = false;
+  scroll_x = view_w;
+}
+
+// ---------------- Drawing ----------------
+void drawScroll() {
+  static uint32_t last = 0;
+  uint32_t now = millis();
+  if (now - last < 17) return;  // ~59 FPS
+  last = now;
+
+  if (updating) return;
+
+  memset(viewBuffer, 0, sizeof(viewBuffer));
+  if (g_bgNoise) drawRandomPixelsBackground(viewBuffer, view_w, view_h);
+
+  if (segmentedActive && tileCount > 0) {
+    // global origin depends on mode
+    int origin = 0;
+    if (g_mode == MODE_STATIC) {
+      // center if shorter than panel; clip left if longer
+      origin = (total_w < view_w) ? (view_w - total_w)/2 : 0;
+    }
+
+    for (int y = 0; y < view_h; ++y) {
+      uint16_t *dst_row = &viewBuffer[y * view_w];
+      for (int x = 0; x < view_w; ++x) {
+        int gx = (g_mode == MODE_SCROLL) ? (x - scroll_x) : (x - origin);
+        uint16_t px = 0;
+        // search tile that contains gx
+        for (int i = 0; i < tileCount; ++i) {
+          const Tile &t = tiles[i];
+          if (gx >= t.x && gx < (t.x + t.w)) {
+            int lx = gx - t.x;
+            int y_off = (view_h - (int)t.h) / 2;
+            int dst_y0 = (y_off < 0) ? 0 : y_off;
+            int yy = y - dst_y0;
+            if (yy >= 0 && yy < (int)t.h) px = t.pix[yy * t.w + lx];
+            break;
+          }
+        }
+        if (px) dst_row[x] = px;
+      }
+    }
+
+    virtualDisp->drawRGBBitmap(0, 0, viewBuffer, view_w, view_h);
+
+    if (g_mode == MODE_SCROLL) {
+      scroll_x -= SCROLL_SPEED;
+      if (scroll_x < -((int)total_w)) scroll_x = view_w;
+    }
+    return;
+  }
+
+  // Legacy full-frame rendering
+  if (front_pixels && front_w > 0 && front_h > 0) {
+    int origin = 0;
+    if (g_mode == MODE_STATIC) {
+      origin = (front_w < view_w) ? (view_w - front_w)/2 : 0;
+    }
+    int y_off = (view_h - (int)front_h) / 2;
+    int src_y0 = (y_off < 0) ? -y_off : 0;
+    int dst_y0 = (y_off < 0) ? 0 : y_off;
+    int draw_h = front_h - src_y0;
+    if (draw_h > (view_h - dst_y0)) draw_h = view_h - dst_y0;
+    if (draw_h > 0) {
+      for (int y = 0; y < draw_h; ++y) {
+        uint16_t *dst_row = &viewBuffer[(dst_y0 + y) * view_w];
+        const uint16_t *src_row = &front_pixels[(src_y0 + y) * front_w];
+        for (int x = 0; x < view_w; ++x) {
+          int x_src = (g_mode == MODE_SCROLL) ? (x - scroll_x) : (x - origin);
+          if ((unsigned)x_src < (unsigned)front_w) dst_row[x] = src_row[x_src];
+        }
+      }
+    }
+    virtualDisp->drawRGBBitmap(0, 0, viewBuffer, view_w, view_h);
+    if (g_mode == MODE_SCROLL) {
+      scroll_x -= SCROLL_SPEED;
+      if (scroll_x < -((int)front_w)) scroll_x = view_w;
+    }
+  }
+}
+
+void loop() {
+  webSocket.loop();
+  drawScroll();
+}
