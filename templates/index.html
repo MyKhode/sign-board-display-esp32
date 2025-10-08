@@ -4,390 +4,373 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>LED Controller</title>
+
+<!-- Load Khmer fonts from local folders -->
 <style>
-  :root{--bg:#0f1720;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8;--r:12px;}
-  *{box-sizing:border-box}
-  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Siemreap,Arial;background:#071021;color:#e6eef6}
-  .wrap{max-width:900px;margin:16px auto;padding:12px}
-  header{display:flex;gap:8px;align-items:center;margin-bottom:12px}
-  h1{font-size:18px;margin:0}
-  .status{margin-left:auto;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.06);font-size:12px}
-  .tabs{display:flex;gap:6px;border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:10px;flex-wrap:wrap}
-  .tab{padding:8px 12px;border-radius:10px 10px 0 0;cursor:pointer;background:transparent;border:1px solid transparent;border-bottom:none;color:#cfe9f2}
-  .tab.active{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.12);border-bottom-color:transparent}
-  .card{background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.02));border-radius:var(--r);padding:12px;margin:10px 0;border:1px solid rgba(255,255,255,.06)}
-  .hidden{display:none}
-  label{display:block;font-size:12px;color:var(--muted);margin:6px 0 6px}
-  textarea,select,input[type="color"],input[type="range"],input[type="file"]{width:100%;padding:8px;border-radius:10px;background:transparent;border:1px solid rgba(255,255,255,.08);color:inherit}
-  .grid{display:grid;gap:10px}
-  @media(min-width:720px){.grid.two{grid-template-columns:1fr 1fr}.grid.three{grid-template-columns:1fr 1fr 1fr}}
-  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-  .btn{padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,.1);background:var(--accent);color:#02182b;font-weight:600;cursor:pointer}
-  .btn.secondary{background:transparent;color:#cfe9f2}
-  .btn.danger{background:#ef4444;color:#fff;border-color:#ef4444}
-  .pill{font-size:12px;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.06)}
-  canvas{width:100%;max-width:640px;aspect-ratio:4/1;background:#000;border-radius:10px;border:1px solid rgba(255,255,255,.06)}
-  .log{max-height:160px;overflow:auto;background:rgba(2,6,23,.4);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:8px;font:12px ui-monospace,Menlo,Consolas,monospace}
-  .swatch{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
-  .chip{width:14px;height:14px;border-radius:4px;border:1px solid rgba(255,255,255,.15);display:inline-block}
-  .row.center{align-items:flex-end}
+@font-face { font-family: 'Bayon'; src: url('/Bayon/Bayon-Regular.ttf') format('truetype'); font-display: swap; }
+@font-face { font-family: 'Bokor'; src: url('/Bokor/Bokor-Regular.ttf') format('truetype'); font-display: swap; }
+@font-face { font-family: 'Koulen'; src: url('/Koulen/Koulen-Regular.ttf') format('truetype'); font-display: swap; }
+@font-face { font-family: 'Moul'; src: url('/Moul/Moul-Regular.ttf') format('truetype'); font-display: swap; }
+
+:root {
+  --bg: #0b1220;
+  --glass: rgba(255,255,255,.06);
+  --muted: #a8b3c7;
+  --accent: #06b6d4;
+  --r: 16px;
+}
+* { box-sizing: border-box; }
+html,body {
+  height:100%;margin:0;
+  font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Siemreap,Arial;
+  background:radial-gradient(1200px 800px at 20% -10%, #132036 0%, rgba(10,16,30,0) 60%),linear-gradient(180deg,#081120,#03070f);
+  color:#eaf2fb;
+}
+.wrap{max-width:980px;margin:18px auto;padding:16px}
+header{display:flex;gap:10px;align-items:center;margin-bottom:16px}
+h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.3px}
+.pill{font-size:12px;padding:6px 10px;border-radius:999px;background:var(--glass);border:1px solid rgba(255,255,255,.1)}
+.status{margin-left:auto;padding:6px 10px;border-radius:999px;background:var(--glass);font-size:12px;border:1px solid rgba(255,255,255,.08)}
+.card{border-radius:var(--r);padding:18px; margin-top: 8px ;border:1px solid rgba(255,255,255,.08);background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.03));box-shadow:0 8px 30px rgba(0,0,0,.3);backdrop-filter:blur(8px)}
+
+/* Tabs */
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tab-btn{flex:1;padding:10px 14px;border-radius:12px;background:var(--glass);border:1px solid rgba(255,255,255,.12);color:var(--muted);font-weight:600;cursor:pointer;transition:all .2s}
+.tab-btn.active{background:var(--accent);color:#02182b}
+.tab-content{display:none;animation:fadeIn .25s ease}
+.tab-content.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* Inputs */
+label{display:block;font-size:12px;color:var(--muted);margin:6px 0}
+textarea,select,input[type="color"],input[type="range"],input[type="file"]{
+  width:100%;padding:10px;border-radius:10px;background:transparent;
+  border:1px solid rgba(255,255,255,.12);color:inherit;font-size:14px
+}
+select{background-color:#1a2536;color:#e5e5e5;}
+
+/* Color Picker */
+input[type="color"]{-webkit-appearance:none;height:44px;border-radius:12px;cursor:pointer;padding:0;border:none;outline:1px solid rgba(255,255,255,.12)}
+input[type="color"]::-webkit-color-swatch-wrapper{padding:4px}
+input[type="color"]::-webkit-color-swatch{border-radius:10px;border:none}
+
+/* Buttons */
+.btn{padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:var(--accent);color:#02182b;font-weight:700;cursor:pointer;transition:all .2s}
+.btn:hover{filter:brightness(1.1);}
+.btn.ghost{background:rgba(255,255,255,.06);color:#cfe9f2}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.grid.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid.three{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media(max-width:720px){.grid.two,.grid.three{grid-template-columns:1fr}}
+
+/* Toggles */
+.control-bar{display:flex;gap:14px;align-items:center;justify-content:flex-start;margin:16px 0;flex-wrap:wrap}
+.toggle{display:inline-flex;align-items:center;gap:8px;background:var(--glass);padding:8px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.12);font-size:13px}
+.toggle input{appearance:none;width:40px;height:22px;border-radius:999px;background:#0a1a2a;position:relative;outline:none;border:1px solid rgba(255,255,255,.18)}
+.toggle input:checked{background:#0d253a}
+.toggle input::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:999px;background:white;transition:all .18s}
+.toggle input:checked::after{left:20px}
+
+canvas{width:100%;max-width:640px;aspect-ratio:4/1;background:#000;border-radius:12px;border:1px solid rgba(255,255,255,.08)}
+.log{max-height:180px;overflow:auto;background:rgba(2,6,23,.45);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px;font:12px ui-monospace,Menlo,Consolas,monospace}
+
+
+/* --- Image Upload Box --- */
+.upload-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+}
+
+.upload-box {
+  position: relative;
+  width: 100%;
+  max-width: 90%;
+  height: 130px;
+  border: 2px dashed rgba(255,255,255,0.2);
+  border-radius: 16px;
+  background: rgba(255,255,255,0.04);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+}
+
+.upload-box:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.upload-icon {
+  font-size: 36px;
+  opacity: 0.8;
+  margin-bottom: 8px;
+}
+
+.upload-box input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.upload-text span {
+  display: block;
+  font-size: 12px;
+  color: rgba(255,255,255,0.5);
+  margin-top: 2px;
+}
+
+.upload-info {
+  font-size: 13px;
+  color: #a8b3c7;
+  background: rgba(255,255,255,0.05);
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  width: fit-content;
+  margin-bottom: 10px;
+}
+
+.upload-btn {
+  width: 100%;
+  max-width: 400px;
+  padding: 12px;
+  font-weight: 700;
+}
+
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>LED Text / Image / Video</h1>
+    <h1>LED Text & Image</h1>
+    <span class="pill">Matrix <strong id="matrixSize">128×32</strong></span>
+    <span class="pill">WS <code id="wsUri"></code></span>
     <div id="wsStatus" class="status">WS: disconnected</div>
   </header>
 
-  <nav class="tabs">
-    <button class="tab active" data-tab="textTab">Text</button>
-    <button class="tab" data-tab="imageTab">Image</button>
-    <button class="tab" data-tab="videoTab">Video</button>
-    <span class="pill" style="margin-left:auto">Matrix: <strong id="matrixSize">128×32</strong></span>
-    <span class="pill">WS: <code id="wsUri"></code></span>
-  </nav>
-
-  <!-- TEXT TAB -->
-  <section id="textTab" class="card">
-    <label for="textInput">Message</label>
-    <textarea id="textInput" rows="3">ចម្រៀងខ្មែរ 🎶 Hello 🌏</textarea>
-
-    <div class="grid three">
-      <div>
-        <label for="fontSelect">Font</label>
-        <select id="fontSelect">
-          <option value="Siemreap">Siemreap (Khmer)</option>
-          <option value="Noto Sans" selected>Noto Sans</option>
-          <option value="Noto Color Emoji">Noto Color Emoji</option>
-          <option value="DejaVu Sans">DejaVu Sans</option>
-          <option value="Arial">Arial</option>
-        </select>
-      </div>
-      <div>
-        <label for="fontSize">Font size (pt): <span id="fontSizeValue">22</span></label>
-        <input id="fontSize" type="range" min="8" max="40" value="22">
-      </div>
-      <div>
-        <label for="yOffset">Y-offset (px): <span id="yOffsetValue">0</span></label>
-        <input id="yOffset" type="range" min="-16" max="16" value="0">
-      </div>
-    </div>
-
-    <div class="grid three">
-      <div>
-        <label for="animateMode">Animation</label>
-        <select id="animateMode">
-          <option value="scroll" selected>Scroll</option>
-          <option value="static">Static</option>
-        </select>
-      </div>
-      <div class="row center">
-        <label for="bgNoise" style="margin-right:8px">Background sparkles</label>
-        <input id="bgNoise" type="checkbox">
-      </div>
-      <div></div>
-    </div>
-
-    <div class="grid two">
-      <div>
-        <label for="fgColor">Text color</label>
-        <input id="fgColor" type="color" value="#FFFFFF">
-      </div>
-      <div>
-        <label for="bgColor">Background</label>
-        <input id="bgColor" type="color" value="#000000">
-      </div>
-    </div>
-
-    <div class="row" style="margin-top:8px">
-      <span class="swatch">FG <span id="fgChip" class="chip" style="background:#FFFFFF"></span></span>
-      <span class="swatch">BG <span id="bgChip" class="chip" style="background:#000000"></span></span>
-      <span style="flex:1"></span>
-      <button id="previewBtn" class="btn secondary">Preview</button>
-      <button id="sendTextBtn" class="btn">Send Text → ESP32</button>
-    </div>
-  </section>
-
-  <!-- IMAGE TAB -->
-  <section id="imageTab" class="card hidden">
-    <div class="grid two">
-      <div>
-        <label for="imageFile">Choose image</label>
-        <input id="imageFile" type="file" accept="image/*">
-      </div>
-      <div class="row" style="margin-top:28px;gap:8px;flex-wrap:wrap">
-        <label for="imgAnimate">Animation</label>
-        <select id="imgAnimate">
-          <option value="scroll" selected>Scroll</option>
-          <option value="static">Static</option>
-        </select>
-        <label for="imgBgNoise" style="margin-left:12px">Background sparkles</label>
-        <input id="imgBgNoise" type="checkbox">
-        <button id="sendImageBtn" class="btn" style="margin-left:auto">Send Image → ESP32</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- VIDEO TAB -->
-  <section id="videoTab" class="card hidden">
-    <div class="grid two">
-      <div>
-        <label for="videoFile">Choose video</label>
-        <input id="videoFile" type="file" accept="video/*">
-      </div>
-      <div>
-        <label for="videoFps">FPS: <span id="fpsValue">10</span></label>
-        <input id="videoFps" type="range" min="1" max="30" value="10">
-      </div>
-    </div>
-    <div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap">
-      <label for="vidAnimate">Animation</label>
-      <select id="vidAnimate">
-        <option value="scroll" selected>Scroll</option>
-        <option value="static">Static</option>
-      </select>
-      <label for="vidBgNoise" style="margin-left:12px">Background sparkles</label>
-      <input id="vidBgNoise" type="checkbox">
-      <span style="flex:1"></span>
-      <button id="startVideoBtn" class="btn">Start Stream</button>
-      <button id="stopVideoBtn" class="btn danger">Stop</button>
-    </div>
-  </section>
-
-  <!-- PREVIEW -->
   <section class="card">
-    <strong>Preview</strong>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="textTab">Text</button>
+      <button class="tab-btn" data-tab="imageTab">Image</button>
+    </div>
+
+    <div id="textTab" class="tab-content active">
+      <label for="textInput">Message</label>
+      <textarea id="textInput" rows="3" style="font-family:'Bayon','Siemreap';">សូមស្វាគមន៍ 🎶 Hello 🌏</textarea>
+
+      <div class="grid three">
+        <div>
+          <label for="fontSelect">Font</label>
+          <select id="fontSelect">
+            <option value="Bayon" selected>Bayon</option>
+            <option value="Bokor">Bokor</option>
+            <option value="Koulen">Koulen</option>
+            <option value="Moul">Moul</option>
+            <option value="Noto Sans">Noto Sans</option>
+            <option value="Noto Color Emoji">Noto Color Emoji</option>
+          </select>
+        </div>
+        <div>
+          <label for="fontSize">Font size (pt): <span id="fontSizeValue">15</span></label>
+          <input id="fontSize" type="range" min="8" max="40" value="15">
+        </div>
+        <div>
+          <label for="yOffset">Y-offset (px): <span id="yOffsetValue">0</span></label>
+          <input id="yOffset" type="range" min="-16" max="16" value="0">
+        </div>
+      </div>
+
+      <div class="grid three">
+        <div>
+          <label for="fgColor">Text color</label>
+          <input id="fgColor" type="color" value="#FFFFFF">
+        </div>
+        <div>
+          <label for="fgColor2">Gradient End</label>
+          <input id="fgColor2" type="color" value="#FF00FF">
+        </div>
+        <div>
+          <label for="bgColor">Background</label>
+          <input id="bgColor" type="color" value="#000000">
+        </div>
+      </div>
+
+      <div class="grid two">
+        <div>
+          <label for="gradientDir">Gradient Direction</label>
+          <select id="gradientDir">
+            <option value="horizontal" selected>Horizontal</option>
+            <option value="vertical">Vertical</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="previewBtn" class="btn ghost">Preview</button>
+        <button id="sendTextBtn" class="btn">Send Text → ESP32</button>
+      </div>
+    </div>
+
+    <div id="imageTab" class="tab-content">
+      <div class="upload-container">
+        <label for="imageFile">Upload Image</label>
+        <div class="upload-box">
+          <div class="upload-icon">📁</div>
+          <p class="upload-text">Drag & drop your image here<br><span>or click to browse</span></p>
+          <input id="imageFile" type="file" accept="image/*">
+        </div>
+        <div class="upload-info" id="fileInfo">No file selected</div>
+        <button id="sendImageBtn" class="btn upload-btn">Send Image → ESP32</button>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- CONTROL BAR -->
+  <div class="control-bar card">
+    <div class="toggle"><span>Scroll</span><input id="scrollToggle" type="checkbox" checked></div>
+    <div class="toggle"><span>Sparkles</span><input id="bgNoise" type="checkbox"></div>
+    <div class="toggle"><span>Use Gradient</span><input id="useGradient" type="checkbox" checked></div>
+  </div>
+
+  <section class="card">
+    <div class="sub">Preview</div>
     <canvas id="previewCanvas" width="512" height="128"></canvas>
   </section>
 
-  <!-- STATUS -->
   <section class="card">
-    <strong>Status</strong>
+    <div class="sub">Status</div>
     <div id="log" class="log"></div>
   </section>
 </div>
 
 <script>
 (function(){
-  // ----- Tabs -----
-  const tabs = document.querySelectorAll(".tab");
-  tabs.forEach(t=>t.addEventListener('click', ()=>{
-    tabs.forEach(x=>x.classList.remove('active'));
-    t.classList.add('active');
-    const id = t.getAttribute('data-tab');
-    document.querySelectorAll('.card#textTab,.card#imageTab,.card#videoTab').forEach(s=>s.classList.add('hidden'));
-    document.getElementById(id).classList.remove('hidden');
-  }));
+  const wsStatus=document.getElementById('wsStatus');
+  const logBox=document.getElementById('log');
+  const fgColor=document.getElementById('fgColor');
+  const bgColor=document.getElementById('bgColor');
+  const fgColor2=document.getElementById('fgColor2');
+  const useGradient=document.getElementById('useGradient');
+  const gradientDir=document.getElementById('gradientDir');
+  const textInput=document.getElementById('textInput');
+  const fontSelect=document.getElementById('fontSelect');
+  const fontSize=document.getElementById('fontSize');
+  const fontSizeValue=document.getElementById('fontSizeValue');
+  const yOffset=document.getElementById('yOffset');
+  const yOffsetValue=document.getElementById('yOffsetValue');
+  const scrollToggle=document.getElementById('scrollToggle');
+  const bgNoise=document.getElementById('bgNoise');
+  const previewBtn=document.getElementById('previewBtn');
+  const sendTextBtn=document.getElementById('sendTextBtn');
+  const imageFile=document.getElementById('imageFile');
+  const sendImageBtn=document.getElementById('sendImageBtn');
+  const canvas=document.getElementById('previewCanvas');
+  const ctx=canvas.getContext('2d');
 
-  // ----- Constants / Elements -----
-  const MATRIX_W = 128, MATRIX_H = 32;
-  const WS_URI = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+  function log(msg,lvl="info"){
+    const t=new Date().toLocaleTimeString();
+    const color=lvl==="error"?"#ef4444":lvl==="warn"?"#eab308":"#a8b3c7";
+    logBox.innerHTML=`<div style="color:${color}">[${t}] ${msg}</div>`+logBox.innerHTML;
+  }
 
-  const wsStatus = document.getElementById('wsStatus');
-  document.getElementById('wsUri').textContent = WS_URI;
+  // ✅ Add this tab switching logic
+  document.querySelectorAll(".tab-btn").forEach(btn=>{
+    btn.onclick=()=>{
+      document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach(c=>c.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById(btn.dataset.tab).classList.add("active");
+    };
+  });
 
-  const canvas = document.getElementById('previewCanvas');
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  fontSize.oninput=()=>{fontSizeValue.textContent=fontSize.value; drawPreview();};
 
-  // Text controls
-  const textInput = document.getElementById('textInput');
-  const fontSelect = document.getElementById('fontSelect');
-  const fontSize = document.getElementById('fontSize');
-  const fontSizeValue = document.getElementById('fontSizeValue');
-  const yOffset = document.getElementById('yOffset');
-  const yOffsetValue = document.getElementById('yOffsetValue');
-  const fgColor = document.getElementById('fgColor');
-  const bgColor = document.getElementById('bgColor');
-  const fgChip = document.getElementById('fgChip');
-  const bgChip = document.getElementById('bgChip');
-  const previewBtn = document.getElementById('previewBtn');
-  const sendTextBtn = document.getElementById('sendTextBtn');
+  fontSize.oninput=()=>{fontSizeValue.textContent=fontSize.value; drawPreview();};
+  yOffset.oninput=()=>{yOffsetValue.textContent=yOffset.value; drawPreview();};
+  fontSelect.onchange=()=>{ textInput.style.fontFamily=fontSelect.value; drawPreview(); };
+  fgColor.oninput=drawPreview; fgColor2.oninput=drawPreview;
+  bgColor.oninput=drawPreview; useGradient.onchange=drawPreview;
+  gradientDir.onchange=drawPreview;
 
-  // New controls
-  const animateMode = document.getElementById('animateMode');
-  const bgNoise = document.getElementById('bgNoise');
-
-  // Image controls
-  const imageFile = document.getElementById('imageFile');
-  const imgAnimate = document.getElementById('imgAnimate');
-  const imgBgNoise = document.getElementById('imgBgNoise');
-  const sendImageBtn = document.getElementById('sendImageBtn');
-
-  // Video controls
-  const videoFile = document.getElementById('videoFile');
-  const videoFps = document.getElementById('videoFps');
-  const fpsValue = document.getElementById('fpsValue');
-  const startVideoBtn = document.getElementById('startVideoBtn');
-  const stopVideoBtn = document.getElementById('stopVideoBtn');
-  const vidAnimate = document.getElementById('vidAnimate');
-  const vidBgNoise = document.getElementById('vidBgNoise');
-
-  const logEl = document.getElementById('log');
-
-  // ----- Logger -----
-  function log(m){ const t=new Date().toLocaleTimeString(); logEl.innerHTML = `<div>[${t}] ${m}</div>` + logEl.innerHTML; }
-
-  // ----- WebSocket (auto-reconnect) -----
-  let ws = null;
+  let ws=null,reconnectTimer=null;
   function connectWS(){
-    try{
-      ws = new WebSocket(WS_URI);
-      ws.binaryType = 'arraybuffer';
-      ws.onopen = ()=>{ wsStatus.textContent="WS: connected"; wsStatus.style.background="rgba(6,182,212,.18)"; ws.send(JSON.stringify({type:"hello",role:"browser"})); log("WebSocket connected"); };
-      ws.onclose = ()=>{ wsStatus.textContent="WS: disconnected"; wsStatus.style.background=""; log("WebSocket disconnected"); setTimeout(connectWS, 1500); };
-      ws.onerror = (e)=>{ wsStatus.textContent="WS: error"; log("WS error"); console.warn(e); };
-      ws.onmessage = (ev)=>{
-        if(ev.data instanceof ArrayBuffer){ log(`Received binary (${ev.data.byteLength} bytes)`); }
-        else{
-          try{ const m = JSON.parse(ev.data); if(m.type==="status") log(`${m.level||"info"}: ${m.message}`); else log(`MSG: ${ev.data}`); }
-          catch{ log(`MSG: ${ev.data}`); }
-        }
-      };
-    }catch(e){ log("WS connect failed"); setTimeout(connectWS,1500); }
-  }
-  connectWS();
+    const WS_URI=(location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws";
+    document.getElementById('wsUri').textContent=WS_URI;
+    ws=new WebSocket(WS_URI,["browser"]);
+    ws.binaryType="arraybuffer";
+    ws.onopen=()=>{wsStatus.textContent="WS: connected";wsStatus.style.background="rgba(22,163,74,.22)";log("WebSocket connected ✅");ws.send(JSON.stringify({type:"hello",role:"browser"}));};
+    ws.onmessage=(ev)=>{try{const j=JSON.parse(ev.data);if(j.type==="status")log(j.message,j.level||"info");}catch(e){console.warn("WS parse error",e);}};
+    ws.onerror=()=>log("WebSocket error ⚠️","error");
+    ws.onclose=()=>{wsStatus.textContent="WS: disconnected";wsStatus.style.background="";log("WebSocket closed, retrying in 2s…","warn");clearTimeout(reconnectTimer);reconnectTimer=setTimeout(connectWS,2000);};
+  } connectWS();
 
-  // ----- UI bindings -----
-  function updateChips(){ fgChip.style.background = fgColor.value; bgChip.style.background = bgColor.value; }
-  fontSize.addEventListener('input', ()=> fontSizeValue.textContent = fontSize.value);
-  yOffset.addEventListener('input', ()=> yOffsetValue.textContent = yOffset.value);
-  videoFps.addEventListener('input', ()=> fpsValue.textContent = videoFps.value);
-  fgColor.addEventListener('input', ()=> { updateChips(); drawTextPreview(); });
-  bgColor.addEventListener('input', ()=> { updateChips(); drawTextPreview(); });
-  updateChips();
-
-  // ----- Text preview (approx) -----
-  function drawTextPreview(){
-    ctx.fillStyle = bgColor.value; ctx.fillRect(0,0,canvas.width,canvas.height);
-    ctx.fillStyle = fgColor.value; ctx.textBaseline = 'top';
-    ctx.font = `${parseInt(fontSize.value,10)}px ${fontSelect.value}, sans-serif`;
-    const text = textInput.value;
-    const metrics = ctx.measureText(text);
-    const textW = Math.ceil(metrics.width);
-    const x = Math.max(0, Math.floor((canvas.width - textW)/2));
-    const y = Math.floor(canvas.height/2 - parseInt(fontSize.value,10)/2 + parseInt(yOffset.value,10));
-    ctx.fillText(text, x, y);
-  }
-  previewBtn.addEventListener('click', drawTextPreview);
-  drawTextPreview();
-
-  // ----- Build text command -----
-  function buildTextPayload(){
-    return {
-      type: "command",
-      action: "render_and_send",
-      text: textInput.value,
-      font_family: fontSelect.value,
-      font_size_pt: Number(fontSize.value),
-      fg_color: fgColor.value,
-      bg_color: bgColor.value,
-      width: MATRIX_W,
-      height: MATRIX_H,
-      y_offset: Number(yOffset.value),
-      animate: animateMode.value,         // "scroll" | "static"
-      bg_noise: bgNoise.checked           // true | false
-    };
-  }
-
-  // ----- Send text -----
-  function sendText(){
-    if(!ws || ws.readyState !== WebSocket.OPEN){ alert("WebSocket not connected"); return; }
-    ws.send(JSON.stringify(buildTextPayload()));
-    log("Sent text render command");
-  }
-  sendTextBtn.addEventListener('click', sendText);
-
-  // ----- RGB565 packers -----
-  function rgb888to565(r,g,b){ return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3); }
-  function frameFromCanvasToRGB565Bytes(){
-    const s = document.createElement('canvas'); s.width = MATRIX_W; s.height = MATRIX_H;
-    const sctx = s.getContext('2d',{willReadFrequently:true});
-    sctx.drawImage(canvas,0,0,MATRIX_W,MATRIX_H);
-    const img = sctx.getImageData(0,0,MATRIX_W,MATRIX_H).data;
-    const buf = new ArrayBuffer(MATRIX_W*MATRIX_H*2); const view=new DataView(buf);
-    for(let i=0,o=0;i<img.length;i+=4,o+=2){
-      const r=img[i+2], g=img[i+1], b=img[i], a=img[i+3];
-      const rr=a?Math.round(r*a/255):0, gg=a?Math.round(g*a/255):0, bb=a?Math.round(b*a/255):0;
-      view.setUint16(o, rgb888to565(rr,gg,bb), true);
+  function drawPreview(){
+    ctx.fillStyle=bgColor.value;
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.font=`${fontSize.value}px '${fontSelect.value}', 'Siemreap', sans-serif`;
+    ctx.textBaseline="middle";
+    const text=textInput.value;
+    let fill=fgColor.value;
+    if(useGradient.checked){
+      const grad=gradientDir.value==="vertical"?ctx.createLinearGradient(0,0,0,canvas.height):ctx.createLinearGradient(0,0,canvas.width,0);
+      grad.addColorStop(0,fgColor.value);grad.addColorStop(1,fgColor2.value);fill=grad;
     }
-    return buf;
+    ctx.fillStyle=fill;
+    ctx.fillText(text,10,canvas.height/2+parseInt(yOffset.value,10));
   }
+  previewBtn.onclick=drawPreview;
 
-  // ----- Image -----
-  let loadedImage = null;
-  imageFile.addEventListener('change', (e)=>{
-    const f = e.target.files?.[0]; if(!f) return;
-    const img = new Image();
-    img.onload = ()=>{
-      ctx.fillStyle = bgColor.value; ctx.fillRect(0,0,canvas.width,canvas.height);
-      const ar = img.width / img.height;
-      let dw = canvas.width, dh = Math.round(dw/ar);
-      if(dh > canvas.height){ dh = canvas.height; dw = Math.round(dh*ar); }
-      const dx = Math.floor((canvas.width - dw)/2), dy = Math.floor((canvas.height - dh)/2);
-      ctx.drawImage(img,dx,dy,dw,dh);
-      loadedImage = img;
-      log(`Image loaded: ${f.name} (${img.width}×${img.height})`);
-    };
-    img.onerror = ()=> log("Image load error");
-    img.src = URL.createObjectURL(f);
-  });
+  sendTextBtn.onclick=()=>{
+    if(!ws||ws.readyState!==WebSocket.OPEN){alert("WebSocket not connected");return;}
+    ws.send(JSON.stringify({
+      type:"command",action:"render_and_send",
+      text:textInput.value,font_family:fontSelect.value,font_size_pt:Number(fontSize.value),
+      fg_color:fgColor.value,fg_color2:fgColor2.value,bg_color:bgColor.value,
+      width:128,height:32,y_offset:Number(yOffset.value),
+      animate:(scrollToggle.checked?"scroll":"static"),
+      bg_noise:bgNoise.checked,use_gradient:useGradient.checked,gradient_dir:gradientDir.value
+    }));
+    log("Text command sent ✅");
+  };
 
-  async function sendImage(){
-    if(!ws || ws.readyState !== WebSocket.OPEN){ alert("WebSocket not connected"); return; }
-    if(!loadedImage){ alert("Choose an image first"); return; }
-    // Send config first
-    ws.send(JSON.stringify({type:"config", animate: imgAnimate.value, bg_noise: imgBgNoise.checked}));
-    // Then send frame (legacy; server will segment)
-    const buf = frameFromCanvasToRGB565Bytes();
+  sendImageBtn.onclick=async()=>{
+    if(!ws||ws.readyState!==WebSocket.OPEN){alert("WebSocket not connected");return;}
+    const file=imageFile.files[0];if(!file){alert("Select image first");return;}
+    const bmp=await createImageBitmap(file);
+    const off=document.createElement('canvas');off.width=128;off.height=32;
+    const c2d=off.getContext('2d',{willReadFrequently:true});
+    c2d.fillStyle="#000";c2d.fillRect(0,0,off.width,off.height);
+    const scale=Math.min(off.width/bmp.width,off.height/bmp.height);
+    const w=bmp.width*scale,h=bmp.height*scale;
+    const x=(off.width-w)/2,y=(off.height-h)/2;
+    c2d.drawImage(bmp,x,y,w,h);
+    const idata=c2d.getImageData(0,0,off.width,off.height);
+    const buf=new ArrayBuffer(4+off.width*off.height*2);
+    const dv=new DataView(buf);
+    dv.setUint16(0,off.width,true);dv.setUint16(2,off.height,true);
+    const px=new Uint8Array(buf,4);let p=0;
+    for(let i=0;i<idata.data.length;i+=4){
+      const r=idata.data[i],g=idata.data[i+1],b=idata.data[i+2];
+      const rgb565=((r&0xF8)<<8)|((g&0xFC)<<3)|(b>>3);
+      px[p++]=rgb565&0xFF;px[p++]=rgb565>>8;
+    }
     ws.send(buf);
-    log(`Sent image frame (${buf.byteLength} bytes)`);
-  }
-  sendImageBtn.addEventListener('click', sendImage);
-
-  // ----- Video -----
-  const video = document.createElement('video'); video.muted = true; video.playsInline = true;
-  let videoTimer = null;
-
-  videoFile.addEventListener('change', (e)=>{
-    const f = e.target.files?.[0]; if(!f) return;
-    stopVideo();
-    video.src = URL.createObjectURL(f);
-    video.onloadeddata = ()=>{ drawVideoFrame(); log(`Video loaded: ${f.name} (${video.videoWidth}×${video.videoHeight})`); };
-    video.onerror = ()=> log("Video load error");
-  });
-
-  function drawVideoFrame(){
-    if(!video.videoWidth) return;
-    ctx.fillStyle = bgColor.value; ctx.fillRect(0,0,canvas.width,canvas.height);
-    const ar = video.videoWidth / video.videoHeight;
-    let dw = canvas.width, dh = Math.round(dw/ar);
-    if(dh > canvas.height){ dh = canvas.height; dw = Math.round(dh*ar); }
-    const dx = Math.floor((canvas.width-dw)/2), dy = Math.floor((canvas.height-dh)/2);
-    ctx.drawImage(video,dx,dy,dw,dh);
-  }
-
-  function startVideo(){
-    if(!ws || ws.readyState !== WebSocket.OPEN){ alert("WebSocket not connected"); return; }
-    if(!video.src){ alert("Choose a video first"); return; }
-    // Push current config
-    ws.send(JSON.stringify({type:"config", animate: vidAnimate.value, bg_noise: vidBgNoise.checked}));
-    const fps = Math.max(1, Math.min(30, parseInt(videoFps.value,10)||10));
-    video.currentTime = 0;
-    video.play().then(()=>{
-      const interval = Math.round(1000/fps);
-      log(`Streaming video @ ${fps} FPS`);
-      videoTimer = setInterval(()=>{
-        if(video.ended || video.paused){ stopVideo(); return; }
-        drawVideoFrame();
-        ws.send(frameFromCanvasToRGB565Bytes());
-      }, interval);
-    }).catch(err=> log(`Video play error: ${err}`));
-  }
-  function stopVideo(){ if(videoTimer){ clearInterval(videoTimer); videoTimer=null; } if(!video.paused) video.pause(); log("Stopped video stream"); }
-
-  startVideoBtn.addEventListener('click', startVideo);
-  stopVideoBtn.addEventListener('click', stopVideo);
+    log(`Image sent (${off.width}×${off.height}) ✅`);
+  };
 })();
 </script>
 </body>

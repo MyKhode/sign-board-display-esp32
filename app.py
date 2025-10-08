@@ -13,7 +13,7 @@ FONT_SIZE_PT_DEFAULT = 22
 FG_COLOR_DEFAULT = (255, 255, 255)
 BG_COLOR_DEFAULT = (0, 0, 0)
 
-# Safer segments for long lines
+# Segments for long lines
 MAX_SEGMENT_WIDTH = 192
 SEGMENT_DELAY_S   = 0.010
 
@@ -23,13 +23,18 @@ browser_clients = set()
 # ======== Utils ========
 def parse_color(c, fb):
     if isinstance(c, (list, tuple)) and len(c) == 3:
-        try: r,g,b = [max(0,min(255,int(v))) for v in c]; return (r,g,b)
-        except: return fb
+        try:
+            r,g,b = [max(0,min(255,int(v))) for v in c]
+            return (r,g,b)
+        except:
+            return fb
     if isinstance(c, str):
         s = c.strip()[1:] if c.strip().startswith("#") else c.strip()
         if len(s)==6:
-            try: return (int(s[0:2],16), int(s[2:4],16), int(s[4:6],16))
-            except: pass
+            try:
+                return (int(s[0:2],16), int(s[2:4],16), int(s[4:6],16))
+            except:
+                pass
     return fb
 
 def detect_script(ch):
@@ -56,7 +61,16 @@ def build_attrlist(text, khmer_font, latin_font, emoji_font, font_size_pt):
         attrs.insert(attr)
     return attrs
 
-def render_line_surface(text, height, khmer_font, latin_font, emoji_font, font_pt, fg, bg, y_offset=0):
+def font_available(name: str) -> bool:
+    try:
+        fm = PangoCairo.FontMap.get_default()
+        return any(f.get_name() == name for f in fm.list_families())
+    except Exception:
+        return False
+
+def render_line_surface(text, height, khmer_font, latin_font, emoji_font,
+                        font_pt, fg, bg, y_offset=0, fg2=None,
+                        use_gradient=False, gradient_dir="horizontal"):
     dummy = cairo.ImageSurface(cairo.FORMAT_ARGB32, 16, 16)
     dcr = cairo.Context(dummy)
     layout = PangoCairo.create_layout(dcr)
@@ -72,14 +86,27 @@ def render_line_surface(text, height, khmer_font, latin_font, emoji_font, font_p
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, text_w, height)
     cr = cairo.Context(surf)
     cr.set_source_rgb(*[c/255 for c in bg]); cr.paint()
-    cr.set_source_rgb(*[c/255 for c in fg])
-    layout2 = PangoCairo.create_layout(cr); layout2.set_font_description(base)
+    y = max(0, (height - text_h)//2 + int(y_offset))
+
+    # Gradient (horizontal or vertical)
+    if use_gradient and fg2:
+        if gradient_dir == "vertical":
+            grad = cairo.LinearGradient(0, 0, 0, height)
+        else:
+            grad = cairo.LinearGradient(0, 0, text_w, 0)
+        grad.add_color_stop_rgb(0, fg[0]/255, fg[1]/255, fg[2]/255)
+        grad.add_color_stop_rgb(1, fg2[0]/255, fg2[1]/255, fg2[2]/255)
+        cr.set_source(grad)
+    else:
+        cr.set_source_rgb(*[c/255 for c in fg])
+
+    layout2 = PangoCairo.create_layout(cr)
+    layout2.set_font_description(base)
     layout2.set_text(text, -1)
     layout2.set_attributes(build_attrlist(text, khmer_font, latin_font, emoji_font, font_pt))
     layout2.set_width(-1); layout2.set_single_paragraph_mode(True)
-    PangoCairo.update_layout(cr, layout2)
-    y = max(0, (height - text_h)//2 + int(y_offset))
-    cr.move_to(0, y); PangoCairo.show_layout(cr, layout2)
+    cr.move_to(0, y)
+    PangoCairo.show_layout(cr, layout2)
     return surf
 
 def surface_to_rgb565(surf: cairo.ImageSurface) -> np.ndarray:
@@ -125,97 +152,185 @@ async def send_segment(total_w:int, seg_x:int, seg:np.ndarray):
         try: await ws.send_bytes(pkt)
         except: dead.append(ws)
     for d in dead: esp32_clients.discard(d)
-
-async def send_text_segmented(text, height, font_family, font_pt, fg, bg, y_offset, animate, bg_noise):
-    # Send config first so ESP switches mode immediately
+async def send_text_segmented(text, height, font_family, font_pt, fg, bg, y_offset,
+                              animate, bg_noise, fg2=None, use_gradient=False,
+                              gradient_dir="horizontal", khmer_font_override=None):
     await send_config(animate, bg_noise)
-
+    khmer_font = khmer_font_override or KHMER_FONT_DEFAULT
+    # NOTE: render_line_surface takes (khmer_font, latin_font, emoji_font, ...)
     surf = render_line_surface(
         text, height,
-        KHMER_FONT_DEFAULT, font_family, EMOJI_FONT_DEFAULT,
-        font_pt, fg, bg, y_offset
+        khmer_font, font_family, EMOJI_FONT_DEFAULT,
+        font_pt, fg, bg, y_offset, fg2, use_gradient, gradient_dir
     )
-    rgb = surface_to_rgb565(surf)  # (h, total_w)
+    rgb = surface_to_rgb565(surf)
     h, total_w = rgb.shape
-
-    # Send tiles left→right (1..N)
     x = 0; sent = 0
     while x < total_w:
         seg_w = min(MAX_SEGMENT_WIDTH, total_w - x)
-        seg = rgb[:, x:x+seg_w]
-        await send_segment(total_w, x, seg)
+        await send_segment(total_w, x, rgb[:, x:x+seg_w])
         sent += 1
-        await broadcast_status(f"Sent segment {sent} (x={x}, w={seg_w}) / total {total_w}")
+        await broadcast_status(f"Sent segment {sent} / total width {total_w}")
         x += seg_w
-        # tiny pacing after first two
         if sent >= 2 and SEGMENT_DELAY_S > 0 and x < total_w:
             await asyncio.sleep(SEGMENT_DELAY_S)
 
 # ======== HTTP / WS ========
-async def index(request): return web.FileResponse("templates/index.html")
+async def index(request):
+    return web.FileResponse("templates/index.html")
 
+# --- WebSocket handler ---
+# --- WebSocket handler ---
 async def websocket_handler(request):
-    ws = web.WebSocketResponse(); await ws.prepare(request)
-    esp32_clients.add(ws); await broadcast_status("Client connected")
+    # Accept both browser and ESP32 connections
+    ws = web.WebSocketResponse(
+        autoping=True,
+        heartbeat=20.0,
+        protocols=("arduino", "browser", "esp32")
+    )
+    await ws.prepare(request)
+    peer = request.remote
+    await broadcast_status(f"Client {peer} connected")
+
+    # Default: assume ESP32 client
+    esp32_clients.add(ws)
+
     try:
         async for msg in ws:
+            # --- Handle text messages ---
             if msg.type == WSMsgType.TEXT:
-                try: payload = json.loads(msg.data)
-                except: await broadcast_status(f"Text: {msg.data}"); continue
-
-                if payload.get("type") == "hello":
-                    role = payload.get("role")
-                    if role == "browser": browser_clients.add(ws); esp32_clients.discard(ws); await broadcast_status("Browser registered"); continue
-                    if role == "esp32":   esp32_clients.add(ws); browser_clients.discard(ws); await broadcast_status("ESP32 registered"); continue
-
-                if payload.get("type") == "command" and payload.get("action") in ("render_and_send","render_and_send_text"):
-                    text         = payload.get("text", "")
-                    height       = int(payload.get("height", HEIGHT))
-                    font_family  = payload.get("font_family", LATIN_FONT_DEFAULT)
-                    font_size_pt = int(payload.get("font_size_pt", FONT_SIZE_PT_DEFAULT))
-                    y_offset     = int(payload.get("y_offset", 0))
-                    fg = parse_color(payload.get("fg_color", "#FFFFFF"), FG_COLOR_DEFAULT)
-                    bg = parse_color(payload.get("bg_color", "#000000"), BG_COLOR_DEFAULT)
-                    animate      = payload.get("animate", "scroll")   # "scroll" or "static"
-                    bg_noise     = bool(payload.get("bg_noise", False))
-                    try:
-                        await broadcast_status("Rendering text…")
-                        await send_text_segmented(text, height, font_family, font_size_pt, fg, bg, y_offset, animate, bg_noise)
-                        await broadcast_status("All segments sent")
-                    except Exception as e:
-                        await broadcast_status(f"Render/send error: {e}", level="error")
+                try:
+                    payload = json.loads(msg.data)
+                except Exception:
+                    await broadcast_status(f"Bad JSON: {msg.data}", level="error")
                     continue
 
-                await broadcast_status(f"Unknown command: {payload}", level="warn")
+                msg_type = payload.get("type")
+                # --- Handshake / registration ---
+                if msg_type == "hello":
+                    role = payload.get("role", "unknown")
+                    if role == "browser":
+                        browser_clients.add(ws)
+                        esp32_clients.discard(ws)
+                        await broadcast_status("Browser registered")
+                    elif role == "esp32":
+                        esp32_clients.add(ws)
+                        browser_clients.discard(ws)
+                        await broadcast_status("ESP32 registered")
+                    else:
+                        await broadcast_status(f"Unknown hello role: {role}")
+                    continue
 
+                # --- Command from browser ---
+                if msg_type == "command" and payload.get("action") in ("render_and_send", "render_and_send_text"):
+                    # inside: if msg_type == "command" ...
+                    text         = payload.get("text", "")
+                    height       = int(payload.get("height", HEIGHT))
+                    selected     = payload.get("font_family", LATIN_FONT_DEFAULT)
+                    font_size_pt = int(payload.get("font_size_pt", FONT_SIZE_PT_DEFAULT))
+                    y_offset     = int(payload.get("y_offset", 0))
+                    fg  = parse_color(payload.get("fg_color", "#FFFFFF"), FG_COLOR_DEFAULT)
+                    fg2 = parse_color(payload.get("fg_color2", "#FF00FF"), FG_COLOR_DEFAULT)
+                    bg  = parse_color(payload.get("bg_color", "#000000"), BG_COLOR_DEFAULT)
+                    animate      = payload.get("animate", "scroll")
+                    bg_noise     = bool(payload.get("bg_noise", False))
+                    use_gradient = bool(payload.get("use_gradient", False))
+                    gradient_dir = payload.get("gradient_dir", "horizontal")
+
+                    # Khmer font set from your dropdown
+                    KHMER_FONTS = {"Bayon", "Bokor", "Koulen", "Moul", "Siemreap", "Khmer OS", "Khmer OS System"}
+
+                    # Decide which families to ask Pango for
+                    if selected in KHMER_FONTS:
+                        khmer_font = selected if font_available(selected) else KHMER_FONT_DEFAULT
+                        latin_font = selected if font_available(selected) else LATIN_FONT_DEFAULT
+                    else:
+                        khmer_font = KHMER_FONT_DEFAULT
+                        latin_font = selected if font_available(selected) else LATIN_FONT_DEFAULT
+
+                    # Helpful logs if fonts aren’t installed
+                    if selected not in KHMER_FONTS and not font_available(selected):
+                        await broadcast_status(f"⚠️ Font '{selected}' not found. Using '{latin_font}'.", level="warn")
+                    if selected in KHMER_FONTS and not font_available(selected):
+                        await broadcast_status(f"⚠️ Khmer font '{selected}' not found. Using '{khmer_font}'.", level="warn")
+
+                    try:
+                        await broadcast_status(f"Rendering text with Khmer='{khmer_font}', Latin='{latin_font}' …")
+                        await send_text_segmented(
+                            text, height,
+                            latin_font, font_size_pt, fg, bg, y_offset,
+                            animate, bg_noise, fg2, use_gradient, gradient_dir,
+                            khmer_font_override=khmer_font
+                        )
+                        await broadcast_status("All segments sent ✅")
+                    except Exception as e:
+                        await broadcast_status(f"Render/send error: {e}", level="error")
+
+
+            # --- Handle binary messages (image data from browser) ---
             elif msg.type == WSMsgType.BINARY:
-                # Legacy passthrough (W,H + pixels). Also respect current browser defaults if present:
                 data = msg.data
-                if len(data) >= 4:
-                    w = data[0] | (data[1]<<8); h = data[2] | (data[3]<<8)
-                    px = data[4:4+w*h*2]
-                    arr = np.frombuffer(px, dtype=np.uint16).reshape((h, w))
-                    # No extra config here; you can call send_config() before sending raw frames if needed
-                    x = 0; sent = 0
-                    while x < w:
-                        seg_w = min(MAX_SEGMENT_WIDTH, w - x)
-                        await send_segment(w, x, arr[:, x:x+seg_w])
-                        x += seg_w; sent += 1
-                        if sent >= 2 and SEGMENT_DELAY_S > 0 and x < w:
-                            await asyncio.sleep(SEGMENT_DELAY_S)
-                else:
+                if len(data) < 4:
                     await broadcast_status("Binary too small", level="error")
+                    continue
 
+                w = data[0] | (data[1] << 8)
+                h = data[2] | (data[3] << 8)
+                px = data[4:4 + w * h * 2]
+
+                try:
+                    arr = np.frombuffer(px, dtype=np.uint16).reshape((h, w))
+                except Exception:
+                    await broadcast_status("Bad image buffer", level="error")
+                    continue
+
+                x = 0
+                sent = 0
+                while x < w:
+                    seg_w = min(MAX_SEGMENT_WIDTH, w - x)
+                    await send_segment(w, x, arr[:, x:x + seg_w])
+                    x += seg_w
+                    sent += 1
+                    if sent >= 2 and SEGMENT_DELAY_S > 0 and x < w:
+                        await asyncio.sleep(SEGMENT_DELAY_S)
+
+                await broadcast_status(f"Image forwarded in {sent} segments")
+
+            # --- Handle WebSocket errors ---
             elif msg.type == WSMsgType.ERROR:
-                await broadcast_status(f"WS error: {ws.exception()}", level="error")
+                await broadcast_status(f"WebSocket error: {ws.exception()}", level="error")
+
     finally:
-        browser_clients.discard(ws); esp32_clients.discard(ws)
-        await broadcast_status("Client disconnected")
+        browser_clients.discard(ws)
+        esp32_clients.discard(ws)
+        await broadcast_status(f"Client {peer} disconnected")
+
     return ws
 
-app = web.Application()
+
+# --- CORS (allow all) + static serving ---
+@web.middleware
+async def cors_middleware(request, handler):
+    if request.method == "OPTIONS":
+        resp = web.Response(status=204)
+    else:
+        resp = await handler(request)
+    resp.headers["Access-Control-Allow-Origin"]  = request.headers.get("Origin", "*")
+    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    resp.headers["Access-Control-Allow-Credentials"] = "true"
+    return resp
+
+
+app = web.Application(middlewares=[cors_middleware])
 app.router.add_get("/", index)
 app.router.add_get("/ws", websocket_handler)
+
+# serve static font files
+app.router.add_static("/Bayon", "./Bayon")
+app.router.add_static("/Bokor", "./Bokor")
+app.router.add_static("/Koulen", "./Koulen")
+app.router.add_static("/Moul", "./Moul")
 
 if __name__ == "__main__":
     web.run_app(app, host="0.0.0.0", port=9122)
